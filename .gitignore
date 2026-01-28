@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Model files (large)
+models/*.pth
+models/*.pkl
+
+# Streamlit
+.streamlit/secrets.toml
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data (large raw files)
+data/*.csv
+data/*.xlsx
+
+# Temp
+*.log
+
+# Claude Code
+.claude/
+
+# Old timestamp-prefixed files
+1769494106663-shelter_images/
+1769583425547-*/
+1769505095238-*.ipynb
+1769505127957-*.ipynb
+1769506038576-*.docx

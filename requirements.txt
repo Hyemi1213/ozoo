@@ -1,0 +1,27 @@
+# Web Demo
+streamlit
+
+# Deep Learning
+torch
+torchvision
+
+# Machine Learning
+xgboost
+scikit-learn
+
+# Data Processing
+pandas
+numpy
+openpyxl
+
+# Image Processing
+Pillow
+
+# Visualization
+matplotlib
+seaborn
+plotly
+
+# Utilities
+tqdm
+requests
