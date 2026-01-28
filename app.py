@@ -135,36 +135,27 @@ class FeatureExtractor(nn.Module if TORCH_AVAILABLE else object):
 
 @st.cache_resource
 def load_model():
-    """Load the saved multimodal model bundle if it exists."""
+    """Load the saved multimodal_model.pkl."""
     global MODEL_AVAILABLE
     if not TORCH_AVAILABLE:
+        st.error("PyTorch가 설치되지 않았습니다.")
         return None
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    if os.path.exists(MODEL_PKL):
-        with open(MODEL_PKL, "rb") as f:
-            bundle = pickle.load(f)
+    # Load multimodal_model.pkl
+    with open(MODEL_PKL, "rb") as f:
+        bundle = pickle.load(f)
 
-        # 모델이 EfficientNet CNN인 경우
-        model = bundle.get("model")
-        if model is not None:
-            model = model.to(device)
-            model.eval()
-            bundle["model"] = model
-            bundle["device"] = device
-            MODEL_AVAILABLE = True
-        return bundle
+    # 모델을 device로 이동하고 eval 모드 설정
+    model = bundle.get("model")
+    model = model.to(device)
+    model.eval()
+    bundle["model"] = model
+    bundle["device"] = device
+    MODEL_AVAILABLE = True
 
-    if os.path.exists(CNN_PTH):
-        cnn = models.efficientnet_b0(weights=None)
-        cnn.classifier[1] = nn.Linear(cnn.classifier[1].in_features, 3)
-        cnn.load_state_dict(torch.load(CNN_PTH, map_location=device))
-        cnn.to(device)
-        cnn.eval()
-        return {"model": cnn, "device": device}
-
-    return None
+    return bundle
 
 
 def get_sample_images(n=3, refresh=False):
@@ -182,75 +173,40 @@ def get_sample_images(n=3, refresh=False):
     return [os.path.join(IMAGE_FOLDER, f) for f in st.session_state.sample_images]
 
 
-def predict_with_model(image_path, tabular, bundle):
-    """Perform prediction using the loaded CNN model."""
-    image_pil = Image.open(image_path).convert("RGB")
+def predict_with_model(image_input, tabular, bundle):
+    """Perform prediction using the loaded multimodal_model.pkl (EfficientNet CNN).
 
-    has_model = (bundle is not None and
-                 bundle.get("model") is not None and
-                 TORCH_AVAILABLE)
-
-    if has_model:
-        # Use actual trained EfficientNet CNN model
-        model = bundle.get("model")
-        device = bundle.get("device", torch.device("cpu"))
-
-        # 이미지 전처리
-        transform = T.Compose([
-            T.Resize((224, 224)),
-            T.ToTensor(),
-            T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
-        ])
-
-        img_tensor = transform(image_pil).unsqueeze(0).to(device)
-
-        # 추론
-        with torch.no_grad():
-            outputs = model(img_tensor)
-            # softmax로 확률 변환
-            probs = torch.nn.functional.softmax(outputs, dim=1).cpu().numpy()[0]
-    else:
-        # Demo mode: Use image-based hash for varied but consistent results per image
-        probs = simulate_prediction(image_path, tabular)
-
-    return {"probs": probs, "has_model": has_model}
-
-
-def simulate_prediction(image_path, tabular_features):
-    """Generate varied demo predictions based on image filename hash.
-
-    This creates realistic, varied predictions for demo purposes when
-    the actual model (multimodal_model.pkl) is not available.
-    Each unique image will get a consistent but different prediction.
+    Args:
+        image_input: Either a file path (str) or PIL Image object
+        tabular: Dict of tabular features
+        bundle: Model bundle from load_model()
     """
-    # Use image filename to generate deterministic but varied results
-    filename = os.path.basename(image_path) if isinstance(image_path, str) else "default"
-    hash_val = hash(filename)
+    # Handle both file path and PIL Image input
+    if isinstance(image_input, str):
+        image_pil = Image.open(image_input).convert("RGB")
+    else:
+        image_pil = image_input.convert("RGB")
 
-    # Create a deterministic random state based on filename
-    rng = np.random.RandomState(abs(hash_val) % (2**31))
+    # Use actual trained EfficientNet CNN model from multimodal_model.pkl
+    model = bundle.get("model")
+    device = bundle.get("device", torch.device("cpu"))
 
-    # Generate base probabilities with more variation
-    # Randomly select a dominant class for this image
-    dominant_class = hash_val % 3
+    # 이미지 전처리
+    transform = T.Compose([
+        T.Resize((224, 224)),
+        T.ToTensor(),
+        T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+    ])
 
-    if dominant_class == 0:  # 생존 dominant
-        base_probs = np.array([0.55 + rng.uniform(0.1, 0.3),
-                               0.05 + rng.uniform(0.02, 0.15),
-                               0.10 + rng.uniform(0.02, 0.20)])
-    elif dominant_class == 1:  # 자연사 dominant
-        base_probs = np.array([0.15 + rng.uniform(0.05, 0.20),
-                               0.45 + rng.uniform(0.1, 0.35),
-                               0.10 + rng.uniform(0.05, 0.20)])
-    else:  # 안락사 dominant
-        base_probs = np.array([0.10 + rng.uniform(0.05, 0.20),
-                               0.05 + rng.uniform(0.02, 0.15),
-                               0.50 + rng.uniform(0.15, 0.35)])
+    img_tensor = transform(image_pil).unsqueeze(0).to(device)
 
-    # Normalize to sum to 1
-    probs = base_probs / base_probs.sum()
+    # 추론
+    with torch.no_grad():
+        outputs = model(img_tensor)
+        # softmax로 확률 변환
+        probs = torch.nn.functional.softmax(outputs, dim=1).cpu().numpy()[0]
 
-    return probs
+    return {"probs": probs, "has_model": True}
 
 
 def extract_features_from_image(image_pil, bundle):
@@ -900,59 +856,35 @@ elif page == "예측 데모":
 
     bundle = load_model()
 
-    # Initialize session state for selected sample
-    if "selected_sample" not in st.session_state:
-        st.session_state.selected_sample = 0
+    # 모델 로드 실패 시 에러 표시
+    if bundle is None:
+        st.error("모델을 로드할 수 없습니다. multimodal_model.pkl 파일을 확인해주세요.")
+        st.stop()
 
-    sample_paths = get_sample_images(6)
+    st.divider()
 
-    if sample_paths:
-        sample_names = [os.path.basename(p).split("_")[0] for p in sample_paths]
+    # 2열 레이아웃: 이미지 업로드 | 예측 결과
+    col_left, col_right = st.columns([1, 1])
 
-        st.divider()
+    with col_left:
+        st.markdown("### 📷 이미지 업로드")
 
-        # 2열 레이아웃: 선택된 이미지 | 예측 결과
-        col_left, col_right = st.columns([1, 1])
+        # 파일 업로드
+        uploaded_file = st.file_uploader(
+            "유기견 이미지를 업로드하세요",
+            type=["jpg", "jpeg", "png"],
+            help="JPG, JPEG, PNG 형식의 이미지 파일을 업로드해주세요."
+        )
 
-        with col_left:
-            st.markdown("### 🐕 강아지 선택")
-
-            # 드롭다운으로 강아지 선택
-            options = [f"강아지 #{name}" for name in sample_names]
-            selected_option = st.selectbox(
-                "예측할 강아지를 선택하세요",
-                options=options,
-                index=st.session_state.selected_sample,
-                key="dog_selector"
-            )
-            selected_idx = options.index(selected_option)
-
-            # 선택이 바뀌면 이전 예측 결과 초기화
-            if selected_idx != st.session_state.selected_sample:
-                st.session_state.selected_sample = selected_idx
-                if "prediction_result" in st.session_state:
-                    del st.session_state.prediction_result
-                st.rerun()
-
-            selected_path = sample_paths[selected_idx]
-            uploaded_image = Image.open(selected_path).convert("RGB")
-
-            # 선택된 이미지 표시
-            st.markdown("#### 선택된 강아지")
+        if uploaded_file is not None:
+            # 업로드된 이미지 표시
+            uploaded_image = Image.open(uploaded_file)
+            st.markdown("#### 업로드된 이미지")
             display_img = ImageOps.contain(uploaded_image, (300, 300))
             st.image(display_img, use_container_width=True)
 
-            # 버튼 영역
-            btn_col1, btn_col2 = st.columns(2)
-            with btn_col1:
-                predict_clicked = st.button("🔍 예측하기", type="primary", use_container_width=True)
-            with btn_col2:
-                if st.button("🔄 새로고침", use_container_width=True):
-                    st.session_state.selected_sample = 0
-                    if "prediction_result" in st.session_state:
-                        del st.session_state.prediction_result
-                    get_sample_images(6, refresh=True)
-                    st.rerun()
+            # 예측 버튼
+            predict_clicked = st.button("🔍 예측하기", type="primary", use_container_width=True)
 
             if predict_clicked:
                 tabular = {
@@ -967,65 +899,69 @@ elif page == "예측 데모":
                 }
 
                 with st.spinner("예측 중..."):
-                    result = predict_with_model(selected_path, tabular, bundle)
+                    result = predict_with_model(uploaded_image, tabular, bundle)
 
                 st.session_state.prediction_result = {
                     "probs": result["probs"],
                     "has_model": result["has_model"],
-                    "sample_idx": selected_idx,
-                    "sample_name": sample_names[selected_idx]
+                    "filename": uploaded_file.name
                 }
                 st.rerun()
+        else:
+            st.info("👆 위 버튼을 클릭하여 유기견 이미지를 업로드하세요.")
 
-        # 오른쪽: 예측 결과
-        with col_right:
-            st.markdown("### 예측 결과")
+            # 예시 안내
+            st.markdown("#### 💡 사용 방법")
+            st.markdown("""
+            1. **이미지 업로드**: 유기견 사진을 선택합니다
+            2. **예측하기 클릭**: AI가 위험도를 분석합니다
+            3. **결과 확인**: 생존/자연사/안락사 확률을 확인합니다
+            """)
 
-            if "prediction_result" in st.session_state:
-                result = st.session_state.prediction_result
-                probs = result["probs"]
-                has_model = result["has_model"]
+    # 오른쪽: 예측 결과
+    with col_right:
+        st.markdown("### 예측 결과")
 
-                pred_class = int(np.argmax(probs))
-                pred_label = CLASS_NAMES[pred_class]
-                pred_conf = probs[pred_class] * 100
+        if "prediction_result" in st.session_state and uploaded_file is not None:
+            result = st.session_state.prediction_result
+            probs = result["probs"]
+            has_model = result["has_model"]
 
-                result_styles = ["result-survive", "result-natural", "result-euthanasia"]
-                result_icons = ["🟢", "🟡", "🔴"]
+            pred_class = int(np.argmax(probs))
+            pred_label = CLASS_NAMES[pred_class]
+            pred_conf = probs[pred_class] * 100
 
+            result_styles = ["result-survive", "result-natural", "result-euthanasia"]
+            result_icons = ["🟢", "🟡", "🔴"]
+
+            st.markdown(
+                f'<div class="result-box {result_styles[pred_class]}">'
+                f'<h2>{result_icons[pred_class]} {pred_label}</h2>'
+                f'<p>신뢰도: {pred_conf:.1f}%</p>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+            st.markdown("#### 클래스별 확률")
+            for name, prob, color in zip(CLASS_SHORT, probs, CLASS_COLORS):
                 st.markdown(
-                    f'<div class="result-box {result_styles[pred_class]}">'
-                    f'<h2>{result_icons[pred_class]} {pred_label}</h2>'
-                    f'<p>신뢰도: {pred_conf:.1f}%</p>'
+                    f'<div style="display: flex; align-items: center; margin-bottom: 10px;">'
+                    f'<span style="width: 60px; font-weight: 600;">{name}</span>'
+                    f'<div style="flex: 1; height: 20px; background: #eee; border-radius: 4px; margin: 0 10px;">'
+                    f'<div style="width: {prob*100}%; height: 100%; background: {color}; border-radius: 4px;"></div>'
+                    f'</div>'
+                    f'<span style="width: 50px; text-align: right;">{prob*100:.1f}%</span>'
                     f'</div>',
-                    unsafe_allow_html=True,
+                    unsafe_allow_html=True
                 )
 
-                st.markdown("#### 클래스별 확률")
-                for name, prob, color in zip(CLASS_SHORT, probs, CLASS_COLORS):
-                    st.markdown(
-                        f'<div style="display: flex; align-items: center; margin-bottom: 10px;">'
-                        f'<span style="width: 60px; font-weight: 600;">{name}</span>'
-                        f'<div style="flex: 1; height: 20px; background: #eee; border-radius: 4px; margin: 0 10px;">'
-                        f'<div style="width: {prob*100}%; height: 100%; background: {color}; border-radius: 4px;"></div>'
-                        f'</div>'
-                        f'<span style="width: 50px; text-align: right;">{prob*100:.1f}%</span>'
-                        f'</div>',
-                        unsafe_allow_html=True
-                    )
-
-                st.markdown("#### 위험도 평가")
-                if pred_class == 0:
-                    st.success("**낮은 위험** - 입양/반환 가능성 높음. 입양 홍보에 집중하세요.")
-                elif pred_class == 1:
-                    st.warning("**중간 위험** - 자연사 가능성. 건강 모니터링 및 수의사 진료 권장.")
-                else:
-                    st.error("**높은 위험** - 골든타임 확보 필요! 긴급 입양 홍보/임시보호 연결 권장.")
-
-                if not has_model:
-                    st.caption("* 모델을 로드할 수 없습니다. 시뮬레이션 결과입니다.")
+            st.markdown("#### 위험도 평가")
+            if pred_class == 0:
+                st.success("**낮은 위험** - 입양/반환 가능성 높음. 입양 홍보에 집중하세요.")
+            elif pred_class == 1:
+                st.warning("**중간 위험** - 자연사 가능성. 건강 모니터링 및 수의사 진료 권장.")
             else:
-                st.info("강아지를 선택하고 '예측하기' 버튼을 클릭하세요.")
+                st.error("**높은 위험** - 골든타임 확보 필요! 긴급 입양 홍보/임시보호 연결 권장.")
 
-    else:
-        st.warning("샘플 이미지 폴더를 찾을 수 없습니다.")
+        else:
+            st.info("이미지를 업로드하고 '예측하기' 버튼을 클릭하세요.")
