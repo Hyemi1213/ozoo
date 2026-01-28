@@ -100,10 +100,6 @@ ozoo/
 - **데이터 처리**: pandas, numpy, Pillow
 - **시각화**: matplotlib, seaborn
 
-## 개발자
-
-**지성현** - AI 데이터 엔지니어
-SeSAC 영등포 AI 데이터 엔지니어링 과정
 
 ## 라이센스
 
