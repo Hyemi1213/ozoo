@@ -272,8 +272,8 @@ with st.sidebar:
     )
 
     st.divider()
-    st.caption("SeSAC 영등포 AI 데이터 엔지니어링")
-    st.caption("개발: 지성현")
+    st.caption("SeSAC 화이팅")
+   
 
 
 # ──────────────────────────────────────────────
