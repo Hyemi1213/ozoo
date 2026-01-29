@@ -4,6 +4,7 @@ import os
 import random
 from PIL import Image, ImageOps
 import plotly.graph_objects as go
+import streamlit.components.v1 as components
 
 # ──────────────────────────────────────────────
 # Page config
@@ -13,6 +14,22 @@ st.set_page_config(
     page_icon="🐾",
     layout="wide",
     initial_sidebar_state="expanded",
+)
+
+# Google Analytics
+components.html(
+    """
+    <!-- Google tag (gtag.js) -->
+    <script async src="https://www.googletagmanager.com/gtag/js?id=G-K6VXP3ZE1H"></script>
+    <script>
+      window.dataLayer = window.dataLayer || [];
+      function gtag(){dataLayer.push(arguments);}
+      gtag('js', new Date());
+
+      gtag('config', 'G-K6VXP3ZE1H');
+    </script>
+    """,
+    height=0,
 )
 
 # ──────────────────────────────────────────────
