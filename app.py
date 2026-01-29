@@ -113,6 +113,7 @@ try:
     import pickle
     import xgboost as xgb
     from sklearn.preprocessing import StandardScaler
+    import traceback
 
     TORCH_AVAILABLE = True
     IMPORT_ERROR = None
@@ -147,7 +148,9 @@ def load_model():
         return None
 
     try:
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        # Force CPU for stability
+        device = torch.device("cpu")
+        # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         # Load multimodal_model.pkl
         with open(MODEL_PKL, "rb") as f:
@@ -259,7 +262,8 @@ def predict_with_model(image_input, tabular, bundle):
              probs[int(pred)] = 1.0
              
     except Exception as e:
-        st.error(f"Prediction failed: {e}")
+        error_msg = traceback.format_exc()
+        st.error(f"Prediction failed: {e}\n\nTraceback:\n{error_msg}")
         return {"probs": np.array([0.0, 0.0, 0.0]), "has_model": False}
 
     return {"probs": probs, "has_model": True}

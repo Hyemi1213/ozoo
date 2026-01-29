@@ -1,0 +1,8 @@
+Loading model from multimodal_model.pkl
+Bundle loaded successfully.
+Model type: <class 'xgboost.sklearn.XGBClassifier'>
+Scaler: StandardScaler()
+Image features shape: (1280,)
+Tabular features shape: (8,)
+Final features shape: (1, 1288)
+Prediction (proba): [0.31650877 0.39832988 0.28516138]
