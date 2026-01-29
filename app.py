@@ -2,9 +2,43 @@ import streamlit as st
 import numpy as np
 import os
 import random
+import pathlib
 from PIL import Image, ImageOps
 import plotly.graph_objects as go
-import streamlit.components.v1 as components
+
+# ──────────────────────────────────────────────
+# Google Analytics (Head Injection)
+# ──────────────────────────────────────────────
+def inject_ga():
+    GA_ID = "G-K6VXP3ZE1H"
+    # Find the path to the streamlit index.html file
+    index_path = pathlib.Path(st.__file__).parent / "static" / "index.html"
+    
+    if index_path.exists():
+        with open(index_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        
+        if GA_ID not in content:
+            ga_js = f"""
+    <!-- Google tag (gtag.js) -->
+    <script async src="https://www.googletagmanager.com/gtag/js?id={GA_ID}"></script>
+    <script>
+      window.dataLayer = window.dataLayer || [];
+      function gtag(){{dataLayer.push(arguments);}}
+      gtag('js', new Date());
+      gtag('config', '{GA_ID}');
+    </script>
+    """
+            updated_content = content.replace("</head>", f"{ga_js}</head>")
+            try:
+                with open(index_path, "w", encoding="utf-8") as f:
+                    f.write(updated_content)
+            except Exception:
+                # Fallback if the file is not writable (rare on Cloud)
+                pass
+
+# Patch standard streamlit HTML to include GA head tag
+inject_ga()
 
 # ──────────────────────────────────────────────
 # Page config
@@ -14,22 +48,6 @@ st.set_page_config(
     page_icon="🐾",
     layout="wide",
     initial_sidebar_state="expanded",
-)
-
-# Google Analytics
-components.html(
-    """
-    <!-- Google tag (gtag.js) -->
-    <script async src="https://www.googletagmanager.com/gtag/js?id=G-K6VXP3ZE1H"></script>
-    <script>
-      window.dataLayer = window.dataLayer || [];
-      function gtag(){dataLayer.push(arguments);}
-      gtag('js', new Date());
-
-      gtag('config', 'G-K6VXP3ZE1H');
-    </script>
-    """,
-    height=0,
 )
 
 # ──────────────────────────────────────────────
