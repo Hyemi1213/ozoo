@@ -115,8 +115,13 @@ try:
     from sklearn.preprocessing import StandardScaler
 
     TORCH_AVAILABLE = True
-except ImportError:
+    IMPORT_ERROR = None
+except ImportError as e:
     TORCH_AVAILABLE = False
+    IMPORT_ERROR = str(e)
+except Exception as e:
+    TORCH_AVAILABLE = False
+    IMPORT_ERROR = f"Unexpected error: {str(e)}"
 
 
 class FeatureExtractor(nn.Module if TORCH_AVAILABLE else object):
@@ -135,27 +140,33 @@ class FeatureExtractor(nn.Module if TORCH_AVAILABLE else object):
 
 @st.cache_resource
 def load_model():
-    """Load the saved multimodal_model.pkl."""
+    """Load the saved multimodal_model.pkl (XGBoost + CNN feature extractor + scaler)."""
     global MODEL_AVAILABLE
     if not TORCH_AVAILABLE:
-        st.error("PyTorch가 설치되지 않았습니다.")
+        st.error(f"PyTorch를 불러올 수 없습니다. 상세 에러: {IMPORT_ERROR}")
         return None
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    try:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Load multimodal_model.pkl
-    with open(MODEL_PKL, "rb") as f:
-        bundle = pickle.load(f)
+        # Load multimodal_model.pkl
+        with open(MODEL_PKL, "rb") as f:
+            bundle = pickle.load(f)
 
-    # 모델을 device로 이동하고 eval 모드 설정
-    model = bundle.get("model")
-    model = model.to(device)
-    model.eval()
-    bundle["model"] = model
-    bundle["device"] = device
-    MODEL_AVAILABLE = True
+        # CNN feature extractor를 device로 이동하고 eval 모드 설정
+        feature_extractor = bundle.get("feature_extractor")
+        if feature_extractor is not None:
+            feature_extractor = feature_extractor.to(device)
+            feature_extractor.eval()
+            bundle["feature_extractor"] = feature_extractor
 
-    return bundle
+        bundle["device"] = device
+        MODEL_AVAILABLE = True
+
+        return bundle
+    except Exception as e:
+        st.error(f"모델 로딩 중 에러 발생: {str(e)}")
+        return None
 
 
 def get_sample_images(n=3, refresh=False):
@@ -189,7 +200,9 @@ def predict_with_model(image_input, tabular, bundle):
 
     # Use actual trained EfficientNet CNN model from multimodal_model.pkl
     model = bundle.get("model")
+    feature_extractor = bundle.get("feature_extractor")
     device = bundle.get("device", torch.device("cpu"))
+    scaler = bundle.get("scaler") # Assuming scaler is also in the bundle based on load_model docstring
 
     # 이미지 전처리
     transform = T.Compose([
@@ -200,11 +213,54 @@ def predict_with_model(image_input, tabular, bundle):
 
     img_tensor = transform(image_pil).unsqueeze(0).to(device)
 
-    # 추론
+    # 1. 이미지 피처 추출
     with torch.no_grad():
-        outputs = model(img_tensor)
-        # softmax로 확률 변환
-        probs = torch.nn.functional.softmax(outputs, dim=1).cpu().numpy()[0]
+        if feature_extractor is None:
+             # Fallback if feature extractor is missing, though load_model tries to set it
+             st.error("Feature extractor not found in model bundle.")
+             return {"probs": np.array([0.0, 0.0, 0.0]), "has_model": False}
+        
+        img_features = feature_extractor(img_tensor).cpu().numpy().flatten()
+
+    # 2. 표 데이터 처리
+    # tabular dictionary to list in correct order corresponding to training
+    # Order: is_mixed, age_years, sex_neutered, weight_kg, health_score, has_attack, care_encoded, org_encoded
+    tabular_list = [
+        tabular["is_mixed"],
+        tabular["age_years"],
+        tabular["sex_neutered"],
+        tabular["weight_kg"],
+        tabular["health_score"],
+        tabular["has_attack"],
+        tabular["care_encoded"],
+        tabular["org_encoded"]
+    ]
+    
+    # Scale tabular features if scaler exists
+    if scaler:
+         tabular_features = scaler.transform([tabular_list])[0]
+    else:
+         tabular_features = np.array(tabular_list)
+
+    # 3. Concatenate features
+    final_features = np.concatenate([img_features, tabular_features]).reshape(1, -1)
+
+    # 4. XGBoost Prediction
+    # XGBoost handles numpy arrays directly
+    try:
+        # Check if probability prediction is available
+        if hasattr(model, "predict_proba"):
+            probs = model.predict_proba(final_features)[0]
+        else:
+            # Fallback for models without probability output (unlikely for classifier)
+             pred = model.predict(final_features)[0]
+             # Create one-hot like prob if only class is returned
+             probs = np.zeros(3)
+             probs[int(pred)] = 1.0
+             
+    except Exception as e:
+        st.error(f"Prediction failed: {e}")
+        return {"probs": np.array([0.0, 0.0, 0.0]), "has_model": False}
 
     return {"probs": probs, "has_model": True}
 
@@ -869,11 +925,11 @@ elif page == "예측 데모":
     with col_left:
         st.markdown("### 📷 이미지 업로드")
 
-        # 파일 업로드
+        # 파일 업로드 (Drop Box style)
         uploaded_file = st.file_uploader(
-            "유기견 이미지를 업로드하세요",
+            "📂 이미지를 이곳에 드래그하거나 클릭하여 업로드하세요",
             type=["jpg", "jpeg", "png"],
-            help="JPG, JPEG, PNG 형식의 이미지 파일을 업로드해주세요."
+            help="JPG, JPEG, PNG 형식의 이미지를 지원합니다."
         )
 
         if uploaded_file is not None:
@@ -883,40 +939,43 @@ elif page == "예측 데모":
             display_img = ImageOps.contain(uploaded_image, (300, 300))
             st.image(display_img, use_container_width=True)
 
+            # 새 파일 업로드 시 이전 예측 결과 초기화
+            if "last_pred_file" in st.session_state and st.session_state.last_pred_file != uploaded_file.name:
+                if "prediction_result" in st.session_state:
+                    del st.session_state.prediction_result
+                st.session_state.last_pred_file = uploaded_file.name
+            
+            # 초기화 (첫 실행)
+            if "last_pred_file" not in st.session_state:
+                 st.session_state.last_pred_file = uploaded_file.name
+
             # 예측 버튼
             predict_clicked = st.button("🔍 예측하기", type="primary", use_container_width=True)
 
             if predict_clicked:
-                tabular = {
-                    "is_mixed": 0,
-                    "age_years": 3,
-                    "sex_neutered": 0,
-                    "weight_kg": 10.0,
-                    "health_score": 0,
-                    "has_attack": 0,
-                    "care_encoded": 0,
-                    "org_encoded": 0,
-                }
+                if bundle is None:
+                    st.error("모델이 로드되지 않아 예측을 수행할 수 없습니다.")
+                else:
+                    tabular = {
+                        "is_mixed": 0,
+                        "age_years": 3,
+                        "sex_neutered": 0,
+                        "weight_kg": 10.0,
+                        "health_score": 0,
+                        "has_attack": 0,
+                        "care_encoded": 0,
+                        "org_encoded": 0,
+                    }
 
-                with st.spinner("예측 중..."):
-                    result = predict_with_model(uploaded_image, tabular, bundle)
+                    with st.spinner("🔍 AI가 이미지를 분석하고 있습니다..."):
+                        result = predict_with_model(uploaded_image, tabular, bundle)
 
                 st.session_state.prediction_result = {
                     "probs": result["probs"],
                     "has_model": result["has_model"],
                     "filename": uploaded_file.name
                 }
-                st.rerun()
-        else:
-            st.info("👆 위 버튼을 클릭하여 유기견 이미지를 업로드하세요.")
-
-            # 예시 안내
-            st.markdown("#### 💡 사용 방법")
-            st.markdown("""
-            1. **이미지 업로드**: 유기견 사진을 선택합니다
-            2. **예측하기 클릭**: AI가 위험도를 분석합니다
-            3. **결과 확인**: 생존/자연사/안락사 확률을 확인합니다
-            """)
+                st.session_state.last_pred_file = uploaded_file.name
 
     # 오른쪽: 예측 결과
     with col_right:
@@ -962,6 +1021,3 @@ elif page == "예측 데모":
                 st.warning("**중간 위험** - 자연사 가능성. 건강 모니터링 및 수의사 진료 권장.")
             else:
                 st.error("**높은 위험** - 골든타임 확보 필요! 긴급 입양 홍보/임시보호 연결 권장.")
-
-        else:
-            st.info("이미지를 업로드하고 '예측하기' 버튼을 클릭하세요.")
